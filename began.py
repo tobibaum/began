@@ -165,7 +165,7 @@ class generator(Network):
         self.tanh()
 
 # hyper
-lam = 0.01
+lam = 0.001
 gam = 0.4
 lr = 0.0001
 n_epochs = 10
@@ -197,8 +197,7 @@ loss_fake = tf.reduce_mean(tf.abs(dec.output - gen.output))
 loss_dis = loss_real - k_t * loss_fake
 loss_gen = loss_fake
 
-kt_op = tf.assign(k_t, k_t + lam * (gam*loss_real - loss_fake))
-k_t = tf.clip_by_value(k_t, 0, 1)
+kt_op = tf.assign(k_t, tf.minimum(tf.maximum(k_t + lam * (gam*loss_real - loss_fake), 0), 1))
 conv_m = loss_real + tf.abs(gam*loss_real - loss_fake)
 
 # optimizer
