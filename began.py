@@ -82,7 +82,8 @@ class Network(object):
             bias = tf.get_variable('biases', shape=[num_out],
                             initializer=tf.zeros_initializer())
         input_reshape = tf.reshape(input, [-1, dim])
-        output = tf.matmul(input_reshape, weight) + bias
+        output = tf.matmul(input_reshape, weight)
+        output = tf.nn.bias_add(output, bias)
         return output, [weight, bias]
 
     @_layer
@@ -128,6 +129,9 @@ class encoder(Network):
                 (self.conv(1, 1, n_filt, 1, name='conv%d_c'%i)
                      .pool(2, 2, name='pool%d'%i))
 
+        (self.conv(3, 3, self.n, 1, name='conv0')
+             .elu(name='elu0'))
+
         block(self.n, 0)
         block(2*self.n, 1)
         block(3*self.n, 2)
@@ -157,18 +161,18 @@ class generator(Network):
         up_block(self.n, 2)
         up_block(self.n, 3, up=False)
 
-        self.conv(1, 1, 3, 1, name='conv_img')
+        self.conv(3, 3, 3, 1, name='conv_img')
         self.tanh()
 
 # hyper
-lam = 0.001
-gam = 0.5
+lam = 0.01
+gam = 0.4
 lr = 0.0001
-beta1 = 0.5
-z_shape = 64
 n_epochs = 10
 bs = 16
 seed = 0
+
+z_shape = 128
 n = 64
 h = 64
 
@@ -198,7 +202,7 @@ k_t = tf.clip_by_value(k_t, 0, 1)
 conv_m = loss_real + tf.abs(gam*loss_real - loss_fake)
 
 # optimizer
-opt = tf.train.AdamOptimizer(lr, beta1)
+opt = tf.train.AdamOptimizer(lr)
 dis_grad = opt.compute_gradients(loss_dis, var_list=enc.vars + dec.vars)
 gen_grad = opt.compute_gradients(loss_dis, var_list=gen.vars)
 
@@ -212,10 +216,11 @@ sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
 # load real data
-data_raw = np.load('data.npy')
-data = data_raw / 128. - 1
+data = np.load('data.npy')
 
 print 'loaded data, start training'
+saver = tf.train.Saver()
+global_step = 0
 
 rng = np.random.RandomState(seed)
 # train
@@ -226,11 +231,12 @@ for epoch in range(n_epochs):
     rng.shuffle(order)
     times = []
     for j in range(0, n_batches):
+        t_step = time.time()
         imgs = data[j*bs:j*bs+bs]
+        imgs = imgs / 128. - 1
         feed_dict = {x: imgs}
         ops = [train_ops, loss_gen, loss_dis, k_t, conv_m]
 
-        t_step = time.time()
         run_res = sess.run(ops, feed_dict)
         t_step = time.time() - t_step
         times.append(t_step)
@@ -255,3 +261,7 @@ for epoch in range(n_epochs):
                 img_out = (img_grid * 128 + 128).astype(np.uint8)
 
                 Image.fromarray(img_out).save('results/%d_%d_%s.png'%(epoch, j, name))
+
+        if global_step % 500 == 0:
+            saver.save(sess, 'checkpoints/model', global_step=global_step)
+        global_step += 1
