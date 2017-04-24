@@ -14,10 +14,16 @@ class Network(object):
         self.data = data
         self.vars = []
 
+        self._set_all_kwargs(kwargs)
         scope = kwargs.get('scope', '')
         reuse = kwargs.get('reuse', False)
+
         with tf.variable_scope(scope, reuse=reuse) as scope:
             self.setup()
+
+    def _set_all_kwargs(self, kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def setup(self):
         raise NotImplementedError
@@ -122,22 +128,19 @@ class encoder(Network):
                 (self.conv(1, 1, n_filt, 1, name='conv%d_c'%i)
                      .pool(2, 2, name='pool%d'%i))
 
-        n = 64
-        h = 128
-        block(n, 0)
-        block(2*n, 1)
-        block(3*n, 2)
-        block(4*n, 3, pool=False)
+        block(self.n, 0)
+        block(2*self.n, 1)
+        block(3*self.n, 2)
+        block(4*self.n, 3, pool=False)
 
-        self.fc(128, name='fc_enc')
+        self.fc(self.h, name='fc_enc')
 
 class generator(Network):
     def setup(self):
-        n = 64
 
-        self.fc(8*8*n, name='fc_gen')
+        self.fc(8*8*self.n, name='fc_gen')
         in_raw = self.output
-        reshaped = tf.reshape(in_raw, [-1, 8, 8, n])
+        reshaped = tf.reshape(in_raw, [-1, 8, 8, self.n])
         self.layers['reshape'] = reshaped
 
         def up_block(n, i, up=True):
@@ -149,10 +152,10 @@ class generator(Network):
             if up:
                 self.upsample(2, name='upsample%d'%i)
 
-        up_block(n, 0)
-        up_block(n, 1)
-        up_block(n, 2)
-        up_block(n, 3, up=False)
+        up_block(self.n, 0)
+        up_block(self.n, 1)
+        up_block(self.n, 2)
+        up_block(self.n, 3, up=False)
 
         self.conv(1, 1, 3, 1, name='conv_img')
         self.tanh()
@@ -162,23 +165,25 @@ lam = 0.001
 gam = 0.5
 lr = 0.0001
 beta1 = 0.5
-z_shape = 128
+z_shape = 64
 n_epochs = 10
 bs = 16
 seed = 0
+n = 64
+h = 64
 
 # data
 x = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
 z = tf.random_uniform([tf.shape(x)[0], z_shape], minval=-1, maxval=1)
 
 # structure
-gen = generator(z, scope='generator')
+gen = generator(z, scope='generator', n=n)
 
-enc = encoder(gen.output, scope='encoder')
-dec = generator(enc.output, scope='decoder')
+enc = encoder(gen.output, scope='encoder', h=h, n=n)
+dec = generator(enc.output, scope='decoder', n=n)
 
-enc_real = encoder(x, scope='encoder', reuse=True)
-dec_real = generator(enc_real.output, scope='decoder', reuse=True)
+enc_real = encoder(x, scope='encoder', reuse=True, h=h, n=n)
+dec_real = generator(enc_real.output, scope='decoder', reuse=True, n=n)
 
 # loss
 k_t = tf.Variable(0.0, trainable=False, name='k_t')
@@ -188,7 +193,7 @@ loss_fake = tf.reduce_mean(tf.abs(dec.output - gen.output))
 loss_dis = loss_real - k_t * loss_fake
 loss_gen = loss_fake
 
-kt_op = k_t + lam * (gam*loss_real - loss_fake)
+kt_op = tf.assign(k_t, k_t + lam * (gam*loss_real - loss_fake))
 k_t = tf.clip_by_value(k_t, 0, 1)
 conv_m = loss_real + tf.abs(gam*loss_real - loss_fake)
 
@@ -241,8 +246,12 @@ for epoch in range(n_epochs):
             print out_text
 
         if j%50 == 0:
-            imgs = sess.run(gen.output, feed_dict)
-            img_grid = np.hstack([np.vstack(imgs[k:k+4]) \
-                            for k in range(0, 16, 4)])
-            img_out = (img_grid * 128 + 128).astype(np.uint8)
-            Image.fromarray(img_out).save('results/%d_%d.png'%(epoch, j))
+            r = sess.run([gen.output, dec_real.output, dec.output], feed_dict)
+            imgs_gen, img_d_real, img_d_fake = r
+
+            for name, imgs in zip(['gen', 'dis_real', 'dis_fake'], r):
+                img_grid = np.hstack([np.vstack(imgs[k:k+4]) \
+                                for k in range(0, 16, 4)])
+                img_out = (img_grid * 128 + 128).astype(np.uint8)
+
+                Image.fromarray(img_out).save('results/%d_%d_%s.png'%(epoch, j, name))
